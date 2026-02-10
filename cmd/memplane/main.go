@@ -12,6 +12,7 @@ import (
 	"memplane/internal/config"
 	"memplane/internal/httpserver"
 	"memplane/internal/logging"
+	"memplane/internal/memory"
 
 	"go.uber.org/zap"
 )
@@ -29,13 +30,17 @@ func run() error {
 		return err
 	}
 
+	httpserver.EnableStrictJSONDecoding()
+
 	logger, err := logging.New(cfg.Environment, cfg.LogLevel)
 	if err != nil {
 		return err
 	}
 	defer logger.Sync()
 
-	router, err := httpserver.NewRouter(cfg.Environment)
+	store := memory.NewStore()
+
+	router, err := httpserver.NewRouter(cfg.Environment, store)
 	if err != nil {
 		return err
 	}
