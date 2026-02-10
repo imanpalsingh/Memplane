@@ -35,24 +35,32 @@ func NewEvent(eventID, tenantID, sessionID string, startToken, endTokenExclusive
 		CreatedAt:         createdAt,
 	}
 
-	if event.EventID == "" {
-		return Event{}, errEventIDRequired
-	}
-	if event.TenantID == "" {
-		return Event{}, errTenantIDRequired
-	}
-	if event.SessionID == "" {
-		return Event{}, errSessionIDRequired
-	}
-	if event.StartToken < 0 {
-		return Event{}, errStartTokenNegative
-	}
-	if event.EndTokenExclusive <= event.StartToken {
-		return Event{}, errInvalidTokenRange
-	}
-	if event.CreatedAt.IsZero() {
-		return Event{}, errCreatedAtRequired
+	if err := validateEvent(event); err != nil {
+		return Event{}, err
 	}
 
 	return event, nil
+}
+
+func validateEvent(event Event) error {
+	if event.EventID == "" {
+		return errEventIDRequired
+	}
+	if event.TenantID == "" {
+		return errTenantIDRequired
+	}
+	if event.SessionID == "" {
+		return errSessionIDRequired
+	}
+	if event.StartToken < 0 {
+		return errStartTokenNegative
+	}
+	if event.EndTokenExclusive <= event.StartToken {
+		return errInvalidTokenRange
+	}
+	if event.CreatedAt.IsZero() {
+		return errCreatedAtRequired
+	}
+
+	return nil
 }
