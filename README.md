@@ -16,7 +16,7 @@ Memplane is being built to serve that role for ecosystems such as LangChain and 
 
 ## Project Status
 
-Current phase: bootstrap and service foundation.
+Current phase: episodic event primitives and initial API.
 
 ## Quick Start
 
@@ -32,15 +32,29 @@ Health check:
 curl -i http://127.0.0.1:8080/health
 ```
 
+Create event:
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/events \
+  -H 'Content-Type: application/json' \
+  -d '{"event_id":"evt_1","tenant_id":"tenant_1","session_id":"session_1","start_token":0,"end_token_exclusive":10,"created_at":"2026-02-10T12:00:00Z"}'
+```
+
+List session events:
+
+```bash
+curl -i "http://127.0.0.1:8080/v1/events?tenant_id=tenant_1&session_id=session_1"
+```
+
 ## Roadmap
 
 1. Service foundation (done)
-2. Core episodic event model
-3. In-memory event store
-4. Surprise-based boundary detection (paper-aligned)
-5. Boundary refinement (paper-aligned)
-6. Two-stage retrieval: similarity + contiguity buffers
-7. Public API for ingest/retrieve/session lifecycle
+2. Core episodic event model (done)
+3. In-memory event store (done)
+4. Initial ingest/list API (done)
+5. Surprise-based boundary detection (paper-aligned)
+6. Boundary refinement (paper-aligned)
+7. Two-stage retrieval: similarity + contiguity buffers
 8. Durable persistence
 9. LangChain and Mastra adapters
 10. Evaluation harness and production hardening
