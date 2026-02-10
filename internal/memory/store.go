@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-var errDuplicateEventID = errors.New("event_id already exists in tenant session")
+var ErrDuplicateEventID = errors.New("event_id already exists in tenant session")
 
 type Store struct {
 	mu       sync.RWMutex
@@ -48,7 +48,7 @@ func (s *Store) Append(event Event) error {
 	}
 
 	if _, exists := events.byID[event.EventID]; exists {
-		return errDuplicateEventID
+		return ErrDuplicateEventID
 	}
 
 	events.byID[event.EventID] = event
