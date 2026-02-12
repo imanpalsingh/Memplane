@@ -53,8 +53,8 @@ func TestStoreRejectsDuplicateEventIDInSession(t *testing.T) {
 		t.Fatalf("append first: %v", err)
 	}
 	err = store.Append(second)
-	if !errors.Is(err, errDuplicateEventID) {
-		t.Fatalf("expected error %v, got %v", errDuplicateEventID, err)
+	if !errors.Is(err, ErrDuplicateEventID) {
+		t.Fatalf("expected error %v, got %v", ErrDuplicateEventID, err)
 	}
 }
 
