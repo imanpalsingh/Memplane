@@ -15,6 +15,7 @@ func NewRouter(environment string, store *memory.Store) (*gin.Engine, error) {
 		return nil, errors.New("memory store is required")
 	}
 
+	EnableStrictJSONDecoding()
 	gin.SetMode(ginMode(environment))
 
 	router := gin.New()

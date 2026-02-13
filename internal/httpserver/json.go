@@ -1,7 +1,15 @@
 package httpserver
 
-import "github.com/gin-gonic/gin"
+import (
+	"sync"
+
+	"github.com/gin-gonic/gin"
+)
+
+var strictJSONDecodingOnce sync.Once
 
 func EnableStrictJSONDecoding() {
-	gin.EnableJsonDecoderDisallowUnknownFields()
+	strictJSONDecodingOnce.Do(func() {
+		gin.EnableJsonDecoderDisallowUnknownFields()
+	})
 }

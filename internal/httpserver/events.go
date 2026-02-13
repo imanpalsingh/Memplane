@@ -29,6 +29,11 @@ func (h eventsHandler) create(c *gin.Context) {
 
 	var event memory.Event
 	if err := c.ShouldBindJSON(&event); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(c, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(c, http.StatusBadRequest, "invalid request body")
 		return
 	}
