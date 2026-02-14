@@ -30,8 +30,6 @@ func run() error {
 		return err
 	}
 
-	httpserver.EnableStrictJSONDecoding()
-
 	logger, err := logging.New(cfg.Environment, cfg.LogLevel)
 	if err != nil {
 		return err

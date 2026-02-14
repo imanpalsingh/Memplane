@@ -3,8 +3,10 @@ package httpserver
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +100,25 @@ func TestCreateEventRejectsMissingCreatedAt(t *testing.T) {
 	}
 }
 
+func TestCreateEventRejectsOversizedBody(t *testing.T) {
+	router := newTestRouter(t)
+
+	tooLargeEventID := strings.Repeat("a", int(maxCreateEventBodyBytes))
+	body := fmt.Sprintf(
+		`{"event_id":"%s","tenant_id":"tenant_1","session_id":"session_1","start_token":0,"end_token_exclusive":10,"created_at":"2026-02-10T12:00:00Z"}`,
+		tooLargeEventID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status %d, got %d", http.StatusRequestEntityTooLarge, rec.Code)
+	}
+}
+
 func TestListEventsSuccess(t *testing.T) {
 	store := memory.NewStore()
 	router, err := NewRouter("test", store)
@@ -170,8 +191,6 @@ func TestListEventsRejectsMissingQuery(t *testing.T) {
 
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
-
-	EnableStrictJSONDecoding()
 
 	router, err := NewRouter("test", memory.NewStore())
 	if err != nil {
