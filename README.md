@@ -46,6 +46,14 @@ List session events:
 curl -i "http://127.0.0.1:8080/v1/events?tenant_id=tenant_1&session_id=session_1"
 ```
 
+Segment from surprise scores:
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/segment \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"tenant_1","session_id":"session_1","start_token":100,"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],"threshold":0.8,"min_boundary_gap":1,"created_at":"2026-02-14T12:00:00Z","event_id_prefix":"seg"}'
+```
+
 ## Roadmap
 
 1. Service foundation (done)
