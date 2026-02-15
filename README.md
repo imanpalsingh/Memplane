@@ -16,7 +16,7 @@ Memplane is being built to serve that role for ecosystems such as LangChain and 
 
 ## Project Status
 
-Current phase: episodic event primitives and initial API.
+Current phase: episodic event primitives, surprise-based segmentation, and anchor-based retrieval API.
 
 ## Quick Start
 
@@ -52,6 +52,14 @@ Segment from surprise scores:
 curl -i -X POST http://127.0.0.1:8080/v1/segment \
   -H 'Content-Type: application/json' \
   -d '{"tenant_id":"tenant_1","session_id":"session_1","start_token":100,"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],"threshold":0.8,"min_boundary_gap":1,"created_at":"2026-02-14T12:00:00Z","event_id_prefix":"seg"}'
+```
+
+Retrieve around anchor events:
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/retrieve \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["seg_1"],"top_k":1,"buffer_before":1,"buffer_after":1}'
 ```
 
 ## Roadmap

@@ -308,6 +308,164 @@ func TestSegmentRejectsDuplicatePrefixWithoutPartialWrites(t *testing.T) {
 	}
 }
 
+func TestRetrieveSuccessWithBuffers(t *testing.T) {
+	store := memory.NewStore()
+	base := time.Date(2026, 2, 15, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		event, err := memory.NewEvent(
+			fmt.Sprintf("evt_%d", i+1),
+			"tenant_1",
+			"session_1",
+			i*10,
+			(i+1)*10,
+			base.Add(time.Duration(i)*time.Second),
+		)
+		if err != nil {
+			t.Fatalf("new event: %v", err)
+		}
+		if err := store.Append(event); err != nil {
+			t.Fatalf("append event: %v", err)
+		}
+	}
+
+	router, err := NewRouter("test", store)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["evt_3"],"top_k":1,"buffer_before":1,"buffer_after":1}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var resp struct {
+		Events []memory.Event `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(resp.Events))
+	}
+	if resp.Events[0].EventID != "evt_2" || resp.Events[1].EventID != "evt_3" || resp.Events[2].EventID != "evt_4" {
+		t.Fatalf("unexpected events: %#v", resp.Events)
+	}
+}
+
+func TestRetrieveRejectsInvalidRequest(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","event_ids":[],"top_k":1,"buffer_before":0,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveRejectsInvalidTopK(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["evt_1"],"top_k":0,"buffer_before":0,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveRejectsTooLargeTopK(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := fmt.Sprintf(
+		`{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["evt_1"],"top_k":%d,"buffer_before":0,"buffer_after":0}`,
+		maxRetrieveTopK+1,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveRejectsEmptyEventIDValues(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["  "],"top_k":1,"buffer_before":0,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveRejectsNegativeBuffers(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["evt_1"],"top_k":1,"buffer_before":-1,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveRejectsTooManyAnchorEventIDs(t *testing.T) {
+	router := newTestRouter(t)
+
+	eventIDs := make([]string, maxRetrieveAnchorEventIDs+1)
+	for i := range eventIDs {
+		eventIDs[i] = fmt.Sprintf("evt_%d", i+1)
+	}
+	bodyBytes, err := json.Marshal(retrieveRequest{
+		TenantID:     "tenant_1",
+		SessionID:    "session_1",
+		EventIDs:     eventIDs,
+		TopK:         1,
+		BufferBefore: 0,
+		BufferAfter:  0,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 
