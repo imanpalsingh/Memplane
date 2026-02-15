@@ -30,30 +30,74 @@ func NewStore() *Store {
 }
 
 func (s *Store) Append(event Event) error {
-	if err := validateEvent(event); err != nil {
-		return err
+	return s.AppendMany([]Event{event})
+}
+
+func (s *Store) AppendMany(events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	for _, event := range events {
+		if err := validateEvent(event); err != nil {
+			return err
+		}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := sessionKey{tenantID: event.TenantID, sessionID: event.SessionID}
-	events, ok := s.sessions[key]
-	if !ok {
-		events = &sessionEvents{
-			ordered: make([]Event, 0, 1),
-			byID:    make(map[string]Event),
+	seenBySession := make(map[sessionKey]map[string]struct{})
+	for _, event := range events {
+		key := sessionKey{tenantID: event.TenantID, sessionID: event.SessionID}
+		if existingSession, ok := s.sessions[key]; ok {
+			if _, exists := existingSession.byID[event.EventID]; exists {
+				return ErrDuplicateEventID
+			}
 		}
-		s.sessions[key] = events
+
+		seenIDs, ok := seenBySession[key]
+		if !ok {
+			seenIDs = make(map[string]struct{})
+			seenBySession[key] = seenIDs
+		}
+		if _, exists := seenIDs[event.EventID]; exists {
+			return ErrDuplicateEventID
+		}
+		seenIDs[event.EventID] = struct{}{}
 	}
 
-	if _, exists := events.byID[event.EventID]; exists {
-		return ErrDuplicateEventID
+	updatedSessions := make(map[sessionKey]struct{})
+	for _, event := range events {
+		key := sessionKey{tenantID: event.TenantID, sessionID: event.SessionID}
+		session := s.ensureSession(key)
+		session.byID[event.EventID] = event
+		session.ordered = append(session.ordered, event)
+		updatedSessions[key] = struct{}{}
 	}
 
-	events.byID[event.EventID] = event
-	events.ordered = append(events.ordered, event)
+	for key := range updatedSessions {
+		sortSessionEvents(s.sessions[key])
+	}
 
+	return nil
+}
+
+func (s *Store) ensureSession(key sessionKey) *sessionEvents {
+	events, ok := s.sessions[key]
+	if ok {
+		return events
+	}
+
+	events = &sessionEvents{
+		ordered: make([]Event, 0, 1),
+		byID:    make(map[string]Event),
+	}
+	s.sessions[key] = events
+	return events
+}
+
+func sortSessionEvents(events *sessionEvents) {
 	sort.Slice(events.ordered, func(i, j int) bool {
 		left := events.ordered[i]
 		right := events.ordered[j]
@@ -65,8 +109,6 @@ func (s *Store) Append(event Event) error {
 		}
 		return left.EventID < right.EventID
 	})
-
-	return nil
 }
 
 func (s *Store) Get(tenantID, sessionID, eventID string) (Event, bool) {

@@ -156,6 +156,26 @@ func TestStoreListBySessionReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestStoreAppendManyRejectsDuplicatesInBatch(t *testing.T) {
+	store := NewStore()
+	now := time.Date(2026, 2, 8, 8, 0, 0, 0, time.UTC)
+
+	events := []Event{
+		mustEvent(t, "evt_1", "tenant_1", "session_1", 0, 10, now),
+		mustEvent(t, "evt_1", "tenant_1", "session_1", 10, 20, now.Add(time.Second)),
+	}
+
+	err := store.AppendMany(events)
+	if !errors.Is(err, ErrDuplicateEventID) {
+		t.Fatalf("expected error %v, got %v", ErrDuplicateEventID, err)
+	}
+
+	list := store.ListBySession("tenant_1", "session_1")
+	if len(list) != 0 {
+		t.Fatalf("expected no writes on batch failure, got %#v", list)
+	}
+}
+
 func mustEvent(t *testing.T, eventID, tenantID, sessionID string, startToken, endTokenExclusive int, createdAt time.Time) Event {
 	t.Helper()
 

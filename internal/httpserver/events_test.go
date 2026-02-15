@@ -189,6 +189,125 @@ func TestListEventsRejectsMissingQuery(t *testing.T) {
 	}
 }
 
+func TestSegmentSuccess(t *testing.T) {
+	store := memory.NewStore()
+	router, err := NewRouter("test", store)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+
+	body := `{
+		"tenant_id":"tenant_1",
+		"session_id":"session_1",
+		"start_token":100,
+		"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],
+		"threshold":0.8,
+		"min_boundary_gap":1,
+		"created_at":"2026-02-14T12:00:00Z",
+		"event_id_prefix":"seg"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+
+	var resp struct {
+		Boundaries []int          `json:"boundaries"`
+		Events     []memory.Event `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if len(resp.Boundaries) != 2 || resp.Boundaries[0] != 103 || resp.Boundaries[1] != 106 {
+		t.Fatalf("unexpected boundaries: %#v", resp.Boundaries)
+	}
+	if len(resp.Events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(resp.Events))
+	}
+
+	stored := store.ListBySession("tenant_1", "session_1")
+	if len(stored) != 3 {
+		t.Fatalf("expected 3 stored events, got %d", len(stored))
+	}
+}
+
+func TestSegmentRejectsTooManySurpriseValues(t *testing.T) {
+	router := newTestRouter(t)
+
+	surprise := make([]float64, maxSegmentSurpriseValues+1)
+	for i := range surprise {
+		surprise[i] = 0.1
+	}
+
+	body, err := json.Marshal(segmentRequest{
+		TenantID:       "tenant_1",
+		SessionID:      "session_1",
+		StartToken:     100,
+		Surprise:       surprise,
+		Threshold:      0.8,
+		MinBoundaryGap: 1,
+		CreatedAt:      time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC),
+		EventIDPrefix:  "seg",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestSegmentRejectsDuplicatePrefixWithoutPartialWrites(t *testing.T) {
+	store := memory.NewStore()
+	router, err := NewRouter("test", store)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+
+	body := `{
+		"tenant_id":"tenant_1",
+		"session_id":"session_1",
+		"start_token":100,
+		"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],
+		"threshold":0.8,
+		"min_boundary_gap":1,
+		"created_at":"2026-02-14T12:00:00Z",
+		"event_id_prefix":"seg"
+	}`
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if i == 0 && rec.Code != http.StatusCreated {
+			t.Fatalf("expected first status %d, got %d", http.StatusCreated, rec.Code)
+		}
+		if i == 1 && rec.Code != http.StatusConflict {
+			t.Fatalf("expected second status %d, got %d", http.StatusConflict, rec.Code)
+		}
+	}
+
+	stored := store.ListBySession("tenant_1", "session_1")
+	if len(stored) != 3 {
+		t.Fatalf("expected store to remain at 3 events, got %d", len(stored))
+	}
+}
+
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 
