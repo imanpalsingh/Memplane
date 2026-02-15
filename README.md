@@ -16,7 +16,7 @@ Memplane is being built to serve that role for ecosystems such as LangChain and 
 
 ## Project Status
 
-Current phase: episodic event primitives and initial API.
+Current phase: episodic event primitives, surprise-based segmentation, and anchor-based retrieval API.
 
 ## Quick Start
 
