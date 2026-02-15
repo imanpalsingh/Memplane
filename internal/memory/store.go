@@ -170,20 +170,17 @@ func (s *Store) RetrieveByAnchors(
 		return []Event{}, nil
 	}
 
-	effectiveTopK := topK
-	if effectiveTopK > len(anchorEventIDs) {
-		effectiveTopK = len(anchorEventIDs)
-	}
-	if effectiveTopK > len(session.ordered) {
-		effectiveTopK = len(session.ordered)
-	}
+	// Bound top_k to practical limits before using it as map/slice capacity.
+	effectiveTopK := min(topK, len(anchorEventIDs), len(session.ordered))
 
+	// Build event_id -> ordered index for O(1) anchor lookups.
 	indexByID := make(map[string]int, len(session.ordered))
 	for i, event := range session.ordered {
 		indexByID[event.EventID] = i
 	}
 
 	anchorIndexes := make([]int, 0, effectiveTopK)
+	// Dedupe repeated anchor ids while preserving first-seen request order.
 	seenAnchors := make(map[int]struct{}, effectiveTopK)
 	for _, eventID := range anchorEventIDs {
 		index, found := indexByID[eventID]
@@ -204,6 +201,7 @@ func (s *Store) RetrieveByAnchors(
 		return []Event{}, nil
 	}
 
+	// Merge expanded anchor windows via set semantics to avoid duplicates.
 	includeIndexes := make(map[int]struct{})
 	for _, anchor := range anchorIndexes {
 		start := max(0, anchor-bufferBefore)
@@ -217,6 +215,7 @@ func (s *Store) RetrieveByAnchors(
 	for i := range includeIndexes {
 		orderedIndexes = append(orderedIndexes, i)
 	}
+	// Re-establish deterministic session order after set-based collection.
 	sort.Ints(orderedIndexes)
 
 	result := make([]Event, 0, len(orderedIndexes))
