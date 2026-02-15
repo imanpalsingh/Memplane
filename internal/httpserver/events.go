@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"memplane/internal/memory"
@@ -20,9 +21,13 @@ type listEventsRequest struct {
 	SessionID string `form:"session_id" binding:"required"`
 }
 
-const maxCreateEventBodyBytes int64 = 1 << 20
-const maxSegmentBodyBytes int64 = 1 << 20
+const maxJSONBodyBytes int64 = 1 << 20
+const maxCreateEventBodyBytes int64 = maxJSONBodyBytes
+const maxSegmentBodyBytes int64 = maxJSONBodyBytes
+const maxRetrieveBodyBytes int64 = maxJSONBodyBytes
 const maxSegmentSurpriseValues = 8192
+const maxRetrieveAnchorEventIDs = 256
+const maxRetrieveTopK = maxRetrieveAnchorEventIDs
 
 var (
 	errRequestBodyTooLarge = errors.New("request body too large")
@@ -43,6 +48,19 @@ type segmentRequest struct {
 type segmentResponse struct {
 	Boundaries []int          `json:"boundaries"`
 	Events     []memory.Event `json:"events"`
+}
+
+type retrieveRequest struct {
+	TenantID     string   `json:"tenant_id" binding:"required"`
+	SessionID    string   `json:"session_id" binding:"required"`
+	EventIDs     []string `json:"event_ids"`
+	TopK         int      `json:"top_k"`
+	BufferBefore int      `json:"buffer_before"`
+	BufferAfter  int      `json:"buffer_after"`
+}
+
+type retrieveResponse struct {
+	Events []memory.Event `json:"events"`
 }
 
 func newEventsHandler(store *memory.Store) eventsHandler {
@@ -126,6 +144,53 @@ func (h eventsHandler) segment(c *gin.Context) {
 		Boundaries: boundaries,
 		Events:     events,
 	})
+}
+
+func (h eventsHandler) retrieve(c *gin.Context) {
+	var req retrieveRequest
+	if err := bindJSONWithLimit(c, &req, maxRetrieveBodyBytes); err != nil {
+		writeError(c, statusForBindError(err), err.Error())
+		return
+	}
+
+	if len(req.EventIDs) == 0 {
+		writeError(c, http.StatusBadRequest, "event_ids must contain at least one event id")
+		return
+	}
+
+	if len(req.EventIDs) > maxRetrieveAnchorEventIDs {
+		writeError(
+			c,
+			http.StatusBadRequest,
+			fmt.Sprintf("event_ids must contain at most %d items", maxRetrieveAnchorEventIDs),
+		)
+		return
+	}
+	if req.TopK > maxRetrieveTopK {
+		writeError(c, http.StatusBadRequest, fmt.Sprintf("top_k must be at most %d", maxRetrieveTopK))
+		return
+	}
+	for _, eventID := range req.EventIDs {
+		if strings.TrimSpace(eventID) == "" {
+			writeError(c, http.StatusBadRequest, "event_ids must not contain empty values")
+			return
+		}
+	}
+
+	events, err := h.store.RetrieveByAnchors(
+		req.TenantID,
+		req.SessionID,
+		req.EventIDs,
+		req.TopK,
+		req.BufferBefore,
+		req.BufferAfter,
+	)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, retrieveResponse{Events: events})
 }
 
 func writeError(c *gin.Context, status int, message string) {

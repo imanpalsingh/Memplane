@@ -32,6 +32,7 @@ func NewRouter(environment string, store *memory.Store) (*gin.Engine, error) {
 	v1.POST("/events", eventsHandler.create)
 	v1.GET("/events", eventsHandler.list)
 	v1.POST("/segment", eventsHandler.segment)
+	v1.POST("/retrieve", eventsHandler.retrieve)
 
 	return router, nil
 }
