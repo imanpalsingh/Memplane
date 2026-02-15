@@ -8,6 +8,11 @@ import (
 
 var ErrDuplicateEventID = errors.New("event_id already exists in tenant session")
 
+var (
+	errRetrieveTopKNonPositive = errors.New("top_k must be positive")
+	errRetrieveBufferNegative  = errors.New("buffer_before and buffer_after must be non-negative")
+)
+
 type Store struct {
 	mu       sync.RWMutex
 	sessions map[sessionKey]*sessionEvents
@@ -142,4 +147,82 @@ func (s *Store) ListBySession(tenantID, sessionID string) []Event {
 	list := make([]Event, len(events.ordered))
 	copy(list, events.ordered)
 	return list
+}
+
+func (s *Store) RetrieveByAnchors(
+	tenantID, sessionID string,
+	anchorEventIDs []string,
+	topK, bufferBefore, bufferAfter int,
+) ([]Event, error) {
+	if topK <= 0 {
+		return nil, errRetrieveTopKNonPositive
+	}
+	if bufferBefore < 0 || bufferAfter < 0 {
+		return nil, errRetrieveBufferNegative
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key := sessionKey{tenantID: tenantID, sessionID: sessionID}
+	session, ok := s.sessions[key]
+	if !ok || len(session.ordered) == 0 {
+		return []Event{}, nil
+	}
+
+	effectiveTopK := topK
+	if effectiveTopK > len(anchorEventIDs) {
+		effectiveTopK = len(anchorEventIDs)
+	}
+	if effectiveTopK > len(session.ordered) {
+		effectiveTopK = len(session.ordered)
+	}
+
+	indexByID := make(map[string]int, len(session.ordered))
+	for i, event := range session.ordered {
+		indexByID[event.EventID] = i
+	}
+
+	anchorIndexes := make([]int, 0, effectiveTopK)
+	seenAnchors := make(map[int]struct{}, effectiveTopK)
+	for _, eventID := range anchorEventIDs {
+		index, found := indexByID[eventID]
+		if !found {
+			continue
+		}
+		if _, exists := seenAnchors[index]; exists {
+			continue
+		}
+		seenAnchors[index] = struct{}{}
+		anchorIndexes = append(anchorIndexes, index)
+		if len(anchorIndexes) == effectiveTopK {
+			break
+		}
+	}
+
+	if len(anchorIndexes) == 0 {
+		return []Event{}, nil
+	}
+
+	includeIndexes := make(map[int]struct{})
+	for _, anchor := range anchorIndexes {
+		start := max(0, anchor-bufferBefore)
+		end := min(len(session.ordered)-1, anchor+bufferAfter)
+		for i := start; i <= end; i++ {
+			includeIndexes[i] = struct{}{}
+		}
+	}
+
+	orderedIndexes := make([]int, 0, len(includeIndexes))
+	for i := range includeIndexes {
+		orderedIndexes = append(orderedIndexes, i)
+	}
+	sort.Ints(orderedIndexes)
+
+	result := make([]Event, 0, len(orderedIndexes))
+	for _, i := range orderedIndexes {
+		result = append(result, session.ordered[i])
+	}
+
+	return result, nil
 }

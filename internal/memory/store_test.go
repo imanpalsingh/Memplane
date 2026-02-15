@@ -2,6 +2,7 @@ package memory
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -173,6 +174,79 @@ func TestStoreAppendManyRejectsDuplicatesInBatch(t *testing.T) {
 	list := store.ListBySession("tenant_1", "session_1")
 	if len(list) != 0 {
 		t.Fatalf("expected no writes on batch failure, got %#v", list)
+	}
+}
+
+func TestStoreRetrieveByAnchorsAppliesBuffers(t *testing.T) {
+	store := NewStore()
+	base := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		event := mustEvent(
+			t,
+			fmt.Sprintf("evt_%d", i+1),
+			"tenant_1",
+			"session_1",
+			i*10,
+			(i+1)*10,
+			base.Add(time.Duration(i)*time.Second),
+		)
+		if err := store.Append(event); err != nil {
+			t.Fatalf("append %q: %v", event.EventID, err)
+		}
+	}
+
+	events, err := store.RetrieveByAnchors("tenant_1", "session_1", []string{"evt_3"}, 1, 1, 1)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	if events[0].EventID != "evt_2" || events[1].EventID != "evt_3" || events[2].EventID != "evt_4" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
+func TestStoreRetrieveByAnchorsHonorsTopKAndDeduplicates(t *testing.T) {
+	store := NewStore()
+	base := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		event := mustEvent(
+			t,
+			fmt.Sprintf("evt_%d", i+1),
+			"tenant_1",
+			"session_1",
+			i*10,
+			(i+1)*10,
+			base.Add(time.Duration(i)*time.Second),
+		)
+		if err := store.Append(event); err != nil {
+			t.Fatalf("append %q: %v", event.EventID, err)
+		}
+	}
+
+	events, err := store.RetrieveByAnchors("tenant_1", "session_1", []string{"evt_2", "evt_2", "evt_1"}, 1, 0, 0)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+
+	if len(events) != 1 || events[0].EventID != "evt_2" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
+func TestStoreRetrieveByAnchorsValidation(t *testing.T) {
+	store := NewStore()
+
+	_, err := store.RetrieveByAnchors("tenant_1", "session_1", []string{"evt_1"}, 0, 0, 0)
+	if !errors.Is(err, errRetrieveTopKNonPositive) {
+		t.Fatalf("expected error %v, got %v", errRetrieveTopKNonPositive, err)
+	}
+
+	_, err = store.RetrieveByAnchors("tenant_1", "session_1", []string{"evt_1"}, 1, -1, 0)
+	if !errors.Is(err, errRetrieveBufferNegative) {
+		t.Fatalf("expected error %v, got %v", errRetrieveBufferNegative, err)
 	}
 }
 
