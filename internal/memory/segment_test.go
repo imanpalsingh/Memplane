@@ -18,6 +18,7 @@ func TestBuildEventsFromSurpriseBuildsContiguousEvents(t *testing.T) {
 		"session_1",
 		100,
 		surprise,
+		identitySimilarity(len(surprise)),
 		0.8,
 		1,
 		createdAt,
@@ -27,7 +28,7 @@ func TestBuildEventsFromSurpriseBuildsContiguousEvents(t *testing.T) {
 		t.Fatalf("build events: %v", err)
 	}
 
-	wantBoundaries := []int{103, 106}
+	wantBoundaries := []int{103, 105}
 	if !reflect.DeepEqual(boundaries, wantBoundaries) {
 		t.Fatalf("expected boundaries %v, got %v", wantBoundaries, boundaries)
 	}
@@ -39,10 +40,10 @@ func TestBuildEventsFromSurpriseBuildsContiguousEvents(t *testing.T) {
 	if events[0].EventID != "seg_0" || events[0].StartToken != 100 || events[0].EndTokenExclusive != 103 {
 		t.Fatalf("unexpected first event: %#v", events[0])
 	}
-	if events[1].EventID != "seg_1" || events[1].StartToken != 103 || events[1].EndTokenExclusive != 106 {
+	if events[1].EventID != "seg_1" || events[1].StartToken != 103 || events[1].EndTokenExclusive != 105 {
 		t.Fatalf("unexpected second event: %#v", events[1])
 	}
-	if events[2].EventID != "seg_2" || events[2].StartToken != 106 || events[2].EndTokenExclusive != 107 {
+	if events[2].EventID != "seg_2" || events[2].StartToken != 105 || events[2].EndTokenExclusive != 107 {
 		t.Fatalf("unexpected third event: %#v", events[2])
 	}
 }
@@ -62,7 +63,7 @@ func TestBuildEventsFromSurpriseRejectsInvalidInput(t *testing.T) {
 			name: "negative start token",
 			err:  errSegmentStartTokenNegative,
 			run: func() error {
-				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", -1, validSurprise, 0.5, 1, createdAt, "seg")
+				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", -1, validSurprise, identitySimilarity(len(validSurprise)), 0.5, 1, createdAt, "seg")
 				return err
 			},
 		},
@@ -70,7 +71,15 @@ func TestBuildEventsFromSurpriseRejectsInvalidInput(t *testing.T) {
 			name: "missing surprise",
 			err:  errSegmentSurpriseRequired,
 			run: func() error {
-				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, nil, 0.5, 1, createdAt, "seg")
+				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, nil, identitySimilarity(len(validSurprise)), 0.5, 1, createdAt, "seg")
+				return err
+			},
+		},
+		{
+			name: "missing key similarity",
+			err:  errSegmentKeySimilarityRequired,
+			run: func() error {
+				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, validSurprise, nil, 0.5, 1, createdAt, "seg")
 				return err
 			},
 		},
@@ -78,7 +87,7 @@ func TestBuildEventsFromSurpriseRejectsInvalidInput(t *testing.T) {
 			name: "missing event prefix",
 			err:  errSegmentEventIDPrefixMissing,
 			run: func() error {
-				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, validSurprise, 0.5, 1, createdAt, "")
+				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, validSurprise, identitySimilarity(len(validSurprise)), 0.5, 1, createdAt, "")
 				return err
 			},
 		},
@@ -86,7 +95,25 @@ func TestBuildEventsFromSurpriseRejectsInvalidInput(t *testing.T) {
 			name: "invalid threshold from detector",
 			err:  errNegativeSurpriseThreshold,
 			run: func() error {
-				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, validSurprise, -0.1, 1, createdAt, "seg")
+				_, _, err := BuildEventsFromSurprise("tenant_1", "session_1", 0, validSurprise, identitySimilarity(len(validSurprise)), -0.1, 1, createdAt, "seg")
+				return err
+			},
+		},
+		{
+			name: "mismatched similarity length",
+			err:  errSegmentKeySimilarityLength,
+			run: func() error {
+				_, _, err := BuildEventsFromSurprise(
+					"tenant_1",
+					"session_1",
+					0,
+					validSurprise,
+					[][]float64{{1}},
+					0.5,
+					1,
+					createdAt,
+					"seg",
+				)
 				return err
 			},
 		},
@@ -103,4 +130,14 @@ func TestBuildEventsFromSurpriseRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func identitySimilarity(size int) [][]float64 {
+	similarity := make([][]float64, size)
+	for i := 0; i < size; i++ {
+		row := make([]float64, size)
+		row[i] = 1
+		similarity[i] = row
+	}
+	return similarity
 }
