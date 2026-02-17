@@ -579,6 +579,100 @@ func TestRetrieveRejectsTooManyAnchorEventIDs(t *testing.T) {
 	}
 }
 
+func TestRetrieveByQuerySuccessWithBuffers(t *testing.T) {
+	store := memory.NewStore()
+	base := time.Date(2026, 2, 16, 11, 0, 0, 0, time.UTC)
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_1", 0, 10, base, [][]float64{{1, 0}})
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_2", 10, 20, base.Add(time.Second), [][]float64{{0.9, 0.1}})
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_3", 20, 30, base.Add(2*time.Second), [][]float64{{0, 1}})
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_4", 30, 40, base.Add(3*time.Second), [][]float64{{0.2, 0.98}})
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_5", 40, 50, base.Add(4*time.Second), [][]float64{{0.6, 0.8}})
+
+	router, err := NewRouter("test", store)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","query_vector":[0,1],"top_k":1,"buffer_before":1,"buffer_after":1}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var resp struct {
+		Events []memory.Event `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(resp.Events))
+	}
+	if resp.Events[0].EventID != "evt_2" || resp.Events[1].EventID != "evt_3" || resp.Events[2].EventID != "evt_4" {
+		t.Fatalf("unexpected events: %#v", resp.Events)
+	}
+}
+
+func TestRetrieveByQueryRejectsMissingQueryVector(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","top_k":1,"buffer_before":0,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveByQueryRejectsTooLargeTopK(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := fmt.Sprintf(
+		`{"tenant_id":"tenant_1","session_id":"session_1","query_vector":[0,1],"top_k":%d,"buffer_before":0,"buffer_after":0}`,
+		maxRetrieveTopK+1,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestRetrieveByQueryRejectsDimensionMismatch(t *testing.T) {
+	store := memory.NewStore()
+	base := time.Date(2026, 2, 16, 11, 0, 0, 0, time.UTC)
+	mustAppendEventWithRepresentativeKeys(t, store, "evt_mismatch", 0, 10, base, [][]float64{{1, 0, 0}})
+
+	router, err := NewRouter("test", store)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+
+	body := `{"tenant_id":"tenant_1","session_id":"session_1","query_vector":[0,1],"top_k":1,"buffer_before":0,"buffer_after":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 
@@ -588,4 +682,26 @@ func newTestRouter(t *testing.T) http.Handler {
 	}
 
 	return router
+}
+
+func mustAppendEventWithRepresentativeKeys(
+	t *testing.T,
+	store *memory.Store,
+	eventID string,
+	startToken int,
+	endTokenExclusive int,
+	createdAt time.Time,
+	representativeKeys [][]float64,
+) {
+	t.Helper()
+
+	event, err := memory.NewEvent(eventID, "tenant_1", "session_1", startToken, endTokenExclusive, createdAt)
+	if err != nil {
+		t.Fatalf("new event: %v", err)
+	}
+	event.RepresentativeKeys = representativeKeys
+
+	if err := store.Append(event); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
 }

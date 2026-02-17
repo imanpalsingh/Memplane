@@ -33,6 +33,7 @@ func NewRouter(environment string, store *memory.Store) (*gin.Engine, error) {
 	v1.GET("/events", eventsHandler.list)
 	v1.POST("/segment", eventsHandler.segment)
 	v1.POST("/retrieve", eventsHandler.retrieve)
+	v1.POST("/retrieve/query", eventsHandler.retrieveByQuery)
 
 	return router, nil
 }
