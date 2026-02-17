@@ -35,14 +35,15 @@ var (
 )
 
 type segmentRequest struct {
-	TenantID       string    `json:"tenant_id" binding:"required"`
-	SessionID      string    `json:"session_id" binding:"required"`
-	StartToken     int       `json:"start_token"`
-	Surprise       []float64 `json:"surprise"`
-	Threshold      float64   `json:"threshold"`
-	MinBoundaryGap int       `json:"min_boundary_gap"`
-	CreatedAt      time.Time `json:"created_at"`
-	EventIDPrefix  string    `json:"event_id_prefix"`
+	TenantID       string      `json:"tenant_id" binding:"required"`
+	SessionID      string      `json:"session_id" binding:"required"`
+	StartToken     int         `json:"start_token"`
+	Surprise       []float64   `json:"surprise"`
+	KeySimilarity  [][]float64 `json:"key_similarity" binding:"required"`
+	Threshold      float64     `json:"threshold"`
+	MinBoundaryGap int         `json:"min_boundary_gap"`
+	CreatedAt      time.Time   `json:"created_at"`
+	EventIDPrefix  string      `json:"event_id_prefix"`
 }
 
 type segmentResponse struct {
@@ -121,6 +122,7 @@ func (h eventsHandler) segment(c *gin.Context) {
 		req.SessionID,
 		req.StartToken,
 		req.Surprise,
+		req.KeySimilarity,
 		req.Threshold,
 		req.MinBoundaryGap,
 		req.CreatedAt,

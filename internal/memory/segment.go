@@ -7,10 +7,12 @@ import (
 )
 
 var (
-	errSegmentStartTokenNegative   = errors.New("start_token must be non-negative")
-	errSegmentSurpriseRequired     = errors.New("surprise must contain at least one value")
-	errSegmentEventIDPrefixMissing = errors.New("event id prefix is required")
-	errInvalidBoundary             = errors.New("detected boundary is outside valid token range")
+	errSegmentStartTokenNegative    = errors.New("start_token must be non-negative")
+	errSegmentSurpriseRequired      = errors.New("surprise must contain at least one value")
+	errSegmentKeySimilarityRequired = errors.New("key_similarity is required")
+	errSegmentEventIDPrefixMissing  = errors.New("event id prefix is required")
+	errInvalidBoundary              = errors.New("detected boundary is outside valid token range")
+	errSegmentKeySimilarityLength   = errors.New("key_similarity size must match surprise length")
 )
 
 func BuildEventsFromSurprise(
@@ -18,6 +20,7 @@ func BuildEventsFromSurprise(
 	sessionID string,
 	startToken int,
 	surprise []float64,
+	keySimilarity [][]float64,
 	threshold float64,
 	minBoundaryGap int,
 	createdAt time.Time,
@@ -29,11 +32,21 @@ func BuildEventsFromSurprise(
 	if len(surprise) == 0 {
 		return nil, nil, errSegmentSurpriseRequired
 	}
+	if len(keySimilarity) == 0 {
+		return nil, nil, errSegmentKeySimilarityRequired
+	}
 	if eventIDPrefix == "" {
 		return nil, nil, errSegmentEventIDPrefixMissing
 	}
+	if len(keySimilarity) != len(surprise) {
+		return nil, nil, errSegmentKeySimilarityLength
+	}
 
 	boundariesRelative, err := DetectBoundaries(surprise, threshold, minBoundaryGap)
+	if err != nil {
+		return nil, nil, err
+	}
+	boundariesRelative, err = RefineBoundariesByModularity(boundariesRelative, keySimilarity, minBoundaryGap)
 	if err != nil {
 		return nil, nil, err
 	}

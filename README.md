@@ -16,7 +16,7 @@ Memplane is being built to serve that role for ecosystems such as LangChain and 
 
 ## Project Status
 
-Current phase: episodic event primitives, surprise-based segmentation, and anchor-based retrieval API.
+Current phase: episodic event primitives, surprise-based segmentation with modularity refinement, and anchor-based retrieval API.
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ Segment from surprise scores:
 ```bash
 curl -i -X POST http://127.0.0.1:8080/v1/segment \
   -H 'Content-Type: application/json' \
-  -d '{"tenant_id":"tenant_1","session_id":"session_1","start_token":100,"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],"threshold":0.8,"min_boundary_gap":1,"created_at":"2026-02-14T12:00:00Z","event_id_prefix":"seg"}'
+  -d '{"tenant_id":"tenant_1","session_id":"session_1","start_token":100,"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],"key_similarity":[[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0],[0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]],"threshold":0.8,"min_boundary_gap":1,"created_at":"2026-02-14T12:00:00Z","event_id_prefix":"seg"}'
 ```
 
 Retrieve around anchor events:
@@ -68,9 +68,9 @@ curl -i -X POST http://127.0.0.1:8080/v1/retrieve \
 2. Core episodic event model (done)
 3. In-memory event store (done)
 4. Initial ingest/list API (done)
-5. Surprise-based boundary detection (paper-aligned)
-6. Boundary refinement (paper-aligned)
-7. Two-stage retrieval: similarity + contiguity buffers
+5. Surprise-based boundary detection (paper-aligned, done)
+6. Boundary refinement (paper-aligned, done)
+7. Two-stage retrieval: similarity + contiguity buffers (in progress)
 8. Durable persistence
 9. LangChain and Mastra adapters
 10. Evaluation harness and production hardening

@@ -201,6 +201,15 @@ func TestSegmentSuccess(t *testing.T) {
 		"session_id":"session_1",
 		"start_token":100,
 		"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],
+		"key_similarity":[
+			[1,0,0,0,0,0,0],
+			[0,1,0,0,0,0,0],
+			[0,0,1,0,0,0,0],
+			[0,0,0,1,0,0,0],
+			[0,0,0,0,1,0,0],
+			[0,0,0,0,0,1,0],
+			[0,0,0,0,0,0,1]
+		],
 		"threshold":0.8,
 		"min_boundary_gap":1,
 		"created_at":"2026-02-14T12:00:00Z",
@@ -224,7 +233,7 @@ func TestSegmentSuccess(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 
-	if len(resp.Boundaries) != 2 || resp.Boundaries[0] != 103 || resp.Boundaries[1] != 106 {
+	if len(resp.Boundaries) != 2 || resp.Boundaries[0] != 103 || resp.Boundaries[1] != 105 {
 		t.Fatalf("unexpected boundaries: %#v", resp.Boundaries)
 	}
 	if len(resp.Events) != 3 {
@@ -250,6 +259,7 @@ func TestSegmentRejectsTooManySurpriseValues(t *testing.T) {
 		SessionID:      "session_1",
 		StartToken:     100,
 		Surprise:       surprise,
+		KeySimilarity:  [][]float64{{1}},
 		Threshold:      0.8,
 		MinBoundaryGap: 1,
 		CreatedAt:      time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC),
@@ -260,6 +270,100 @@ func TestSegmentRejectsTooManySurpriseValues(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestSegmentUsesBoundaryRefinementWhenSimilarityProvided(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{
+		"tenant_id":"tenant_1",
+		"session_id":"session_1",
+		"start_token":0,
+		"surprise":[0.05,0.2,1.2,0.1,0.05,0.02],
+		"key_similarity":[
+			[1,4,0.1,0.1,0.1,0.1],
+			[4,1,0.1,0.1,0.1,0.1],
+			[0.1,0.1,1,4,4,4],
+			[0.1,0.1,4,1,4,4],
+			[0.1,0.1,4,4,1,4],
+			[0.1,0.1,4,4,4,1]
+		],
+		"threshold":0.8,
+		"min_boundary_gap":1,
+		"created_at":"2026-02-14T12:00:00Z",
+		"event_id_prefix":"seg_ref"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+
+	var resp struct {
+		Boundaries []int `json:"boundaries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Boundaries) != 1 || resp.Boundaries[0] != 2 {
+		t.Fatalf("expected refined boundary [2], got %#v", resp.Boundaries)
+	}
+}
+
+func TestSegmentRejectsMissingKeySimilarity(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{
+		"tenant_id":"tenant_1",
+		"session_id":"session_1",
+		"start_token":100,
+		"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],
+		"threshold":0.8,
+		"min_boundary_gap":1,
+		"created_at":"2026-02-14T12:00:00Z",
+		"event_id_prefix":"seg"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestSegmentRejectsNonSquareKeySimilarity(t *testing.T) {
+	router := newTestRouter(t)
+
+	body := `{
+		"tenant_id":"tenant_1",
+		"session_id":"session_1",
+		"start_token":100,
+		"surprise":[0.05,0.2],
+		"key_similarity":[
+			[1,0.1],
+			[0.1]
+		],
+		"threshold":0.8,
+		"min_boundary_gap":1,
+		"created_at":"2026-02-14T12:00:00Z",
+		"event_id_prefix":"seg"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/segment", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -282,6 +386,15 @@ func TestSegmentRejectsDuplicatePrefixWithoutPartialWrites(t *testing.T) {
 		"session_id":"session_1",
 		"start_token":100,
 		"surprise":[0.05,0.2,1.2,0.1,0.15,1.5,0.2],
+		"key_similarity":[
+			[1,0,0,0,0,0,0],
+			[0,1,0,0,0,0,0],
+			[0,0,1,0,0,0,0],
+			[0,0,0,1,0,0,0],
+			[0,0,0,0,1,0,0],
+			[0,0,0,0,0,1,0],
+			[0,0,0,0,0,0,1]
+		],
 		"threshold":0.8,
 		"min_boundary_gap":1,
 		"created_at":"2026-02-14T12:00:00Z",
