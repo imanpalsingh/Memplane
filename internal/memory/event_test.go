@@ -3,6 +3,7 @@ package memory
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 )
@@ -74,6 +75,53 @@ func TestNewEventRejectsMissingCreatedAt(t *testing.T) {
 	_, err := NewEvent("evt_1", "tenant_1", "session_1", 1, 2, time.Time{})
 	if !errors.Is(err, errCreatedAtRequired) {
 		t.Fatalf("expected error %v, got %v", errCreatedAtRequired, err)
+	}
+}
+
+func TestNewEventRejectsInvalidRepresentativeKeys(t *testing.T) {
+	now := time.Now().UTC()
+
+	cases := []struct {
+		name               string
+		representativeKeys [][]float64
+		wantErr            error
+	}{
+		{
+			name:               "empty key vector",
+			representativeKeys: [][]float64{{}},
+			wantErr:            errRepresentativeKeyEmpty,
+		},
+		{
+			name:               "mismatched key dimensions",
+			representativeKeys: [][]float64{{1, 2}, {3}},
+			wantErr:            errRepresentativeKeyDimensionMismatch,
+		},
+		{
+			name:               "zero norm key",
+			representativeKeys: [][]float64{{0, 0}},
+			wantErr:            errRepresentativeKeyZeroNorm,
+		},
+		{
+			name:               "non finite key",
+			representativeKeys: [][]float64{{1, math.Inf(1)}},
+			wantErr:            errRepresentativeKeyNonFinite,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			event, err := NewEvent("evt_1", "tenant_1", "session_1", 1, 2, now)
+			if err != nil {
+				t.Fatalf("new event: %v", err)
+			}
+
+			event.RepresentativeKeys = tc.representativeKeys
+			err = validateEvent(event)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -160,5 +208,31 @@ func TestEventJSONRoundTrip(t *testing.T) {
 	}
 	if !decoded.CreatedAt.Equal(event.CreatedAt) {
 		t.Fatalf("expected created_at %v, got %v", event.CreatedAt, decoded.CreatedAt)
+	}
+}
+
+func TestEventJSONRoundTripWithRepresentativeKeys(t *testing.T) {
+	createdAt := time.Date(2026, 2, 8, 7, 0, 0, 0, time.UTC)
+	event, err := NewEvent("evt_1", "tenant_1", "session_1", 10, 20, createdAt)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	event.RepresentativeKeys = [][]float64{{0.1, 0.9}, {0.2, 0.8}}
+
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+
+	var decoded Event
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+
+	if len(decoded.RepresentativeKeys) != 2 {
+		t.Fatalf("expected 2 representative keys, got %d", len(decoded.RepresentativeKeys))
+	}
+	if len(decoded.RepresentativeKeys[0]) != 2 || len(decoded.RepresentativeKeys[1]) != 2 {
+		t.Fatalf("unexpected representative key dimensions: %#v", decoded.RepresentativeKeys)
 	}
 }

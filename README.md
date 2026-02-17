@@ -16,7 +16,7 @@ Memplane is being built to serve that role for ecosystems such as LangChain and 
 
 ## Project Status
 
-Current phase: episodic event primitives, surprise-based segmentation with modularity refinement, and anchor-based retrieval API.
+Current phase: episodic event primitives, surprise-based segmentation with modularity refinement, and two-stage retrieval API (query similarity + contiguity buffers).
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ Create event:
 ```bash
 curl -i -X POST http://127.0.0.1:8080/v1/events \
   -H 'Content-Type: application/json' \
-  -d '{"event_id":"evt_1","tenant_id":"tenant_1","session_id":"session_1","start_token":0,"end_token_exclusive":10,"created_at":"2026-02-10T12:00:00Z"}'
+  -d '{"event_id":"evt_1","tenant_id":"tenant_1","session_id":"session_1","start_token":0,"end_token_exclusive":10,"representative_keys":[[0.1,0.9],[0.2,0.8]],"created_at":"2026-02-10T12:00:00Z"}'
 ```
 
 List session events:
@@ -62,6 +62,14 @@ curl -i -X POST http://127.0.0.1:8080/v1/retrieve \
   -d '{"tenant_id":"tenant_1","session_id":"session_1","event_ids":["seg_1"],"top_k":1,"buffer_before":1,"buffer_after":1}'
 ```
 
+Retrieve from a query vector:
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/retrieve/query \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"tenant_1","session_id":"session_1","query_vector":[0.2,0.9],"top_k":1,"buffer_before":1,"buffer_after":1}'
+```
+
 ## Roadmap
 
 1. Service foundation (done)
@@ -70,7 +78,7 @@ curl -i -X POST http://127.0.0.1:8080/v1/retrieve \
 4. Initial ingest/list API (done)
 5. Surprise-based boundary detection (paper-aligned, done)
 6. Boundary refinement (paper-aligned, done)
-7. Two-stage retrieval: similarity + contiguity buffers (in progress)
+7. Two-stage retrieval: query similarity + contiguity buffers (done, client-supplied vectors)
 8. Durable persistence
 9. LangChain and Mastra adapters
 10. Evaluation harness and production hardening

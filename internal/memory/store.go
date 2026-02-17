@@ -2,6 +2,7 @@ package memory
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"sync"
 )
@@ -9,8 +10,13 @@ import (
 var ErrDuplicateEventID = errors.New("event_id already exists in tenant session")
 
 var (
-	errRetrieveTopKNonPositive = errors.New("top_k must be positive")
-	errRetrieveBufferNegative  = errors.New("buffer_before and buffer_after must be non-negative")
+	errRetrieveTopKNonPositive              = errors.New("top_k must be positive")
+	errRetrieveBufferNegative               = errors.New("buffer_before and buffer_after must be non-negative")
+	errRetrieveQueryVectorRequired          = errors.New("query_vector must contain at least one value")
+	errRetrieveQueryVectorNonFinite         = errors.New("query_vector must not contain NaN or Inf")
+	errRetrieveQueryVectorZeroNorm          = errors.New("query_vector must not be a zero-norm vector")
+	errRetrieveQueryVectorDimensionMismatch = errors.New("query_vector dimension must match representative_keys dimension")
+	errRetrieveRepresentativeKeyZeroNorm    = errors.New("representative_keys must not contain zero-norm vectors")
 )
 
 type Store struct {
@@ -43,17 +49,19 @@ func (s *Store) AppendMany(events []Event) error {
 		return nil
 	}
 
-	for _, event := range events {
+	validatedEvents := make([]Event, len(events))
+	for i, event := range events {
 		if err := validateEvent(event); err != nil {
 			return err
 		}
+		validatedEvents[i] = cloneEvent(event)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	seenBySession := make(map[sessionKey]map[string]struct{})
-	for _, event := range events {
+	for _, event := range validatedEvents {
 		key := sessionKey{tenantID: event.TenantID, sessionID: event.SessionID}
 		if existingSession, ok := s.sessions[key]; ok {
 			if _, exists := existingSession.byID[event.EventID]; exists {
@@ -73,7 +81,7 @@ func (s *Store) AppendMany(events []Event) error {
 	}
 
 	updatedSessions := make(map[sessionKey]struct{})
-	for _, event := range events {
+	for _, event := range validatedEvents {
 		key := sessionKey{tenantID: event.TenantID, sessionID: event.SessionID}
 		session := s.ensureSession(key)
 		session.byID[event.EventID] = event
@@ -131,7 +139,7 @@ func (s *Store) Get(tenantID, sessionID, eventID string) (Event, bool) {
 		return Event{}, false
 	}
 
-	return event, true
+	return cloneEvent(event), true
 }
 
 func (s *Store) ListBySession(tenantID, sessionID string) []Event {
@@ -144,8 +152,10 @@ func (s *Store) ListBySession(tenantID, sessionID string) []Event {
 		return []Event{}
 	}
 
-	list := make([]Event, len(events.ordered))
-	copy(list, events.ordered)
+	list := make([]Event, 0, len(events.ordered))
+	for _, event := range events.ordered {
+		list = append(list, cloneEvent(event))
+	}
 	return list
 }
 
@@ -170,18 +180,66 @@ func (s *Store) RetrieveByAnchors(
 		return []Event{}, nil
 	}
 
-	// Bound top_k to practical limits before using it as map/slice capacity.
 	effectiveTopK := min(topK, len(anchorEventIDs), len(session.ordered))
+	anchorIndexes := anchorIndexesFromEventIDs(session.ordered, anchorEventIDs, effectiveTopK)
+	if len(anchorIndexes) == 0 {
+		return []Event{}, nil
+	}
 
-	// Build event_id -> ordered index for O(1) anchor lookups.
-	indexByID := make(map[string]int, len(session.ordered))
-	for i, event := range session.ordered {
+	return bufferedEventsByAnchorIndexes(session.ordered, anchorIndexes, bufferBefore, bufferAfter), nil
+}
+
+func (s *Store) RetrieveByQuery(
+	tenantID, sessionID string,
+	queryVector []float64,
+	topK, bufferBefore, bufferAfter int,
+) ([]Event, error) {
+	if topK <= 0 {
+		return nil, errRetrieveTopKNonPositive
+	}
+	if bufferBefore < 0 || bufferAfter < 0 {
+		return nil, errRetrieveBufferNegative
+	}
+
+	queryNorm, err := validateQueryVector(queryVector)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key := sessionKey{tenantID: tenantID, sessionID: sessionID}
+	session, ok := s.sessions[key]
+	if !ok || len(session.ordered) == 0 {
+		return []Event{}, nil
+	}
+
+	effectiveTopK := min(topK, len(session.ordered))
+	anchorIndexes, err := anchorIndexesByQuery(session.ordered, queryVector, queryNorm, effectiveTopK)
+	if err != nil {
+		return nil, err
+	}
+	if len(anchorIndexes) == 0 {
+		return []Event{}, nil
+	}
+
+	return bufferedEventsByAnchorIndexes(session.ordered, anchorIndexes, bufferBefore, bufferAfter), nil
+}
+
+type scoredAnchor struct {
+	index int
+	score float64
+}
+
+func anchorIndexesFromEventIDs(ordered []Event, anchorEventIDs []string, topK int) []int {
+	indexByID := make(map[string]int, len(ordered))
+	for i, event := range ordered {
 		indexByID[event.EventID] = i
 	}
 
-	anchorIndexes := make([]int, 0, effectiveTopK)
-	// Dedupe repeated anchor ids while preserving first-seen request order.
-	seenAnchors := make(map[int]struct{}, effectiveTopK)
+	anchorIndexes := make([]int, 0, topK)
+	seenAnchors := make(map[int]struct{}, topK)
 	for _, eventID := range anchorEventIDs {
 		index, found := indexByID[eventID]
 		if !found {
@@ -192,20 +250,80 @@ func (s *Store) RetrieveByAnchors(
 		}
 		seenAnchors[index] = struct{}{}
 		anchorIndexes = append(anchorIndexes, index)
-		if len(anchorIndexes) == effectiveTopK {
+		if len(anchorIndexes) == topK {
 			break
 		}
 	}
 
-	if len(anchorIndexes) == 0 {
-		return []Event{}, nil
+	return anchorIndexes
+}
+
+func anchorIndexesByQuery(ordered []Event, queryVector []float64, queryNorm float64, topK int) ([]int, error) {
+	candidates := make([]scoredAnchor, 0, len(ordered))
+	for i, event := range ordered {
+		score, found, err := eventQueryScore(event, queryVector, queryNorm)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		candidates = append(candidates, scoredAnchor{index: i, score: score})
 	}
 
-	// Merge expanded anchor windows via set semantics to avoid duplicates.
+	if len(candidates) == 0 {
+		return []int{}, nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		left := candidates[i]
+		right := candidates[j]
+		if left.score == right.score {
+			return left.index < right.index
+		}
+		return left.score > right.score
+	})
+
+	effectiveTopK := min(topK, len(candidates))
+	anchorIndexes := make([]int, 0, effectiveTopK)
+	for i := 0; i < effectiveTopK; i++ {
+		anchorIndexes = append(anchorIndexes, candidates[i].index)
+	}
+	return anchorIndexes, nil
+}
+
+func eventQueryScore(event Event, queryVector []float64, queryNorm float64) (float64, bool, error) {
+	if len(event.RepresentativeKeys) == 0 {
+		return 0, false, nil
+	}
+
+	bestScore := 0.0
+	found := false
+	for _, representativeKey := range event.RepresentativeKeys {
+		if len(representativeKey) != len(queryVector) {
+			return 0, false, errRetrieveQueryVectorDimensionMismatch
+		}
+
+		keyNorm := vectorNorm(representativeKey)
+		if keyNorm == 0 {
+			return 0, false, errRetrieveRepresentativeKeyZeroNorm
+		}
+
+		score := dotProduct(queryVector, representativeKey) / (queryNorm * keyNorm)
+		if !found || score > bestScore {
+			bestScore = score
+			found = true
+		}
+	}
+
+	return bestScore, true, nil
+}
+
+func bufferedEventsByAnchorIndexes(ordered []Event, anchorIndexes []int, bufferBefore, bufferAfter int) []Event {
 	includeIndexes := make(map[int]struct{})
 	for _, anchor := range anchorIndexes {
 		start := max(0, anchor-bufferBefore)
-		end := min(len(session.ordered)-1, anchor+bufferAfter)
+		end := min(len(ordered)-1, anchor+bufferAfter)
 		for i := start; i <= end; i++ {
 			includeIndexes[i] = struct{}{}
 		}
@@ -215,13 +333,64 @@ func (s *Store) RetrieveByAnchors(
 	for i := range includeIndexes {
 		orderedIndexes = append(orderedIndexes, i)
 	}
-	// Re-establish deterministic session order after set-based collection.
 	sort.Ints(orderedIndexes)
 
 	result := make([]Event, 0, len(orderedIndexes))
 	for _, i := range orderedIndexes {
-		result = append(result, session.ordered[i])
+		result = append(result, cloneEvent(ordered[i]))
+	}
+	return result
+}
+
+func validateQueryVector(queryVector []float64) (float64, error) {
+	if len(queryVector) == 0 {
+		return 0, errRetrieveQueryVectorRequired
 	}
 
-	return result, nil
+	normSquared := 0.0
+	for _, value := range queryVector {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, errRetrieveQueryVectorNonFinite
+		}
+		normSquared += value * value
+	}
+	if normSquared == 0 {
+		return 0, errRetrieveQueryVectorZeroNorm
+	}
+
+	return math.Sqrt(normSquared), nil
+}
+
+func vectorNorm(values []float64) float64 {
+	normSquared := 0.0
+	for _, value := range values {
+		normSquared += value * value
+	}
+	return math.Sqrt(normSquared)
+}
+
+func dotProduct(left, right []float64) float64 {
+	result := 0.0
+	for i := range left {
+		result += left[i] * right[i]
+	}
+	return result
+}
+
+func cloneEvent(event Event) Event {
+	cloned := event
+	cloned.RepresentativeKeys = deepCopyRepresentativeKeys(event.RepresentativeKeys)
+	return cloned
+}
+
+func deepCopyRepresentativeKeys(representativeKeys [][]float64) [][]float64 {
+	if representativeKeys == nil {
+		return nil
+	}
+
+	cloned := make([][]float64, len(representativeKeys))
+	for i, key := range representativeKeys {
+		cloned[i] = append([]float64(nil), key...)
+	}
+	return cloned
 }
